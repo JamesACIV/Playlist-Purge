@@ -307,19 +307,44 @@ export default function App() {
   if (!user) {
     return (
       <div className="login-screen">
+        <svg className="login-topo" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+          <path d="M-100,800 C200,720 500,600 800,480 S1200,300 1600,200" />
+          <path d="M-100,680 C200,600 500,480 800,360 S1200,180 1600,80" />
+          <path d="M-100,560 C200,480 500,360 800,240 S1200,60 1600,-40" />
+          <path d="M-100,440 C200,360 500,240 800,120 S1200,-60 1600,-160" />
+          <path d="M-100,320 C200,240 500,120 800,0 S1200,-180 1600,-280" />
+          <path d="M-100,200 C200,120 500,0 800,-120 S1200,-300 1600,-400" />
+          <path d="M-100,1000 C200,900 500,760 800,620 S1200,420 1600,300" />
+          <path d="M-100,1120 C200,1020 500,880 800,740 S1200,540 1600,420" />
+        </svg>
         <button className="theme-toggle login-theme-toggle" onClick={() => setDarkMode((d) => !d)}>
           {darkMode ? "☀︎" : "◑"}
         </button>
-        <div className="visualizer" aria-hidden="true">
-          {Array.from({ length: 28 }, (_, i) => (
-            <div key={i} className="visualizer-bar" style={{ animationDelay: `${(i * 0.08) % 1.4}s` }} />
-          ))}
+        <div className="login-content">
+          <div className="visualizer" aria-hidden="true">
+            {Array.from({ length: 36 }, (_, i) => (
+              <div
+                key={i}
+                className="visualizer-bar"
+                style={{
+                  animationDelay: `${(i * 0.09) % 1.6}s`,
+                  animationDuration: `${0.9 + (i % 5) * 0.15}s`,
+                }}
+              />
+            ))}
+          </div>
+          <h1>Playlist Purge</h1>
+          <p>Sort your Spotify library. Make it yours again.</p>
+          <button className="btn-connect" onClick={redirectToSpotifyLogin}>
+            Connect Spotify
+          </button>
+          <div className="login-features">
+            <span>Sort by Era</span>
+            <span>Sort by Genre</span>
+            <span>AI Vibes</span>
+            <span>Export CSV</span>
+          </div>
         </div>
-        <h1>Playlist Purge</h1>
-        <p>Sort your Spotify library. Make it yours again.</p>
-        <button className="btn-connect" onClick={redirectToSpotifyLogin}>
-          Connect Spotify
-        </button>
       </div>
     );
   }

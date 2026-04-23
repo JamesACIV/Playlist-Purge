@@ -6,47 +6,94 @@
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  gap: 20px;
   background: var(--bg-base);
+  overflow: hidden;
+}
+
+.login-topo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.login-topo path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1px;
+  opacity: 0.055;
+}
+
+.login-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  z-index: 1;
 }
 
 .visualizer {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
-  height: 48px;
+  gap: 4px;
+  height: 90px;
 }
 
 .visualizer-bar {
-  width: 3px;
-  border-radius: 2px;
-  background: var(--text-dim);
+  width: 5px;
+  border-radius: 3px;
+  background: linear-gradient(to top, var(--text-dim), transparent);
   animation: viz-pulse 1.2s ease-in-out infinite alternate;
-  min-height: 4px;
+  min-height: 6px;
 }
 
 @keyframes viz-pulse {
-  0%   { height: 4px;  opacity: 0.3; }
-  25%  { height: 28px; opacity: 0.6; }
-  50%  { height: 12px; opacity: 0.4; }
-  75%  { height: 40px; opacity: 0.8; }
-  100% { height: 8px;  opacity: 0.35; }
+  0%   { height: 6px;  opacity: 0.25; }
+  20%  { height: 55px; opacity: 0.7;  }
+  40%  { height: 20px; opacity: 0.4;  }
+  60%  { height: 75px; opacity: 0.9;  }
+  80%  { height: 35px; opacity: 0.55; }
+  100% { height: 12px; opacity: 0.3;  }
 }
 
 .login-screen h1 {
-  font-size: 52px;
+  font-size: 64px;
   font-weight: 300;
-  letter-spacing: -0.96px;
-  line-height: 1.08;
+  letter-spacing: -1.5px;
+  line-height: 1.05;
   color: var(--text);
 }
 
 .login-screen p {
   color: var(--text-sub);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 400;
   letter-spacing: 0.16px;
   line-height: 1.5;
+}
+
+.login-features {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.login-features span {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 5px 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  box-shadow: var(--shadow-inset);
 }
 
 .btn-connect {
