@@ -1,0 +1,50 @@
+:root {
+  --bg-base:      #121212;
+  --bg-surface:   #181818;
+  --bg-elevated:  #242424;
+  --bg-hover:     #2a2a2a;
+  --green:        #1DB954;
+  --green-muted:  rgba(29, 185, 84, 0.12);
+  --text:         #ffffff;
+  --text-sub:     #b3b3b3;
+  --text-dim:     #535353;
+  --border:       rgba(255, 255, 255, 0.08);
+
+  font-family: 'Circular', 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-base);
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3 {
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+p { margin: 0; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--text-dim); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-sub); }
