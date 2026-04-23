@@ -349,6 +349,20 @@ export default function App() {
     );
   }
 
+  function logout() {
+    ["access_token", "refresh_token", "token_expires", "verifier", "user", "playlists", "rate_limit"]
+      .forEach((k) => localStorage.removeItem(k));
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith("tracks_") || k.startsWith("genres_"))
+      .forEach((k) => localStorage.removeItem(k));
+    setUser(null);
+    setPlaylists([]);
+    setTracks([]);
+    setSelectedPlaylist(null);
+    setAllPlaylistsSelected(false);
+    didRun.current = false;
+  }
+
   const ownedPlaylists = playlists.filter((p) => p.owner?.id === user.id);
   const groups = sortMode ? groupTracks(tracks, sortMode, genreMap, aiMap) : null;
 
@@ -375,14 +389,19 @@ export default function App() {
         <div className="header-right">
           <button
             className="theme-toggle"
-            title="Clear cache"
+            data-tooltip="Clear cache"
             onClick={() => { clearCache(); window.location.reload(); }}
           >
             ↺
           </button>
-          <button className="theme-toggle" onClick={() => setDarkMode((d) => !d)}>
+          <button
+            className="theme-toggle"
+            data-tooltip={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={() => setDarkMode((d) => !d)}
+          >
             {darkMode ? "☀︎" : "◑"}
           </button>
+          <button className="logout-btn" data-tooltip="Sign out of Spotify" onClick={logout}>Log out</button>
         </div>
       </header>
 
@@ -416,6 +435,7 @@ export default function App() {
                 <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Couldn't load playlists.</span>
                 <button
                   className="sort-btn"
+                  data-tooltip="Try loading playlists again"
                   style={{ fontSize: 11 }}
                   onClick={() => {
                     localStorage.removeItem("playlists");
@@ -473,7 +493,11 @@ export default function App() {
                     </h2>
                     {!allPlaylistsSelected && !loadingTracks &&
                       selectedPlaylist?.trackTotal > tracks.length && (
-                      <button className="sort-btn load-all-btn" onClick={loadAllTracks}>
+                      <button
+                        className="sort-btn load-all-btn"
+                        data-tooltip="Fetch remaining tracks from Spotify"
+                        onClick={loadAllTracks}
+                      >
                         Load all {selectedPlaylist.trackTotal} tracks
                       </button>
                     )}
@@ -481,6 +505,7 @@ export default function App() {
                   {sortMode && !writeProgress && (
                     <button
                       className="btn-create"
+                      data-tooltip="Save each group as a new Spotify playlist"
                       onClick={handleWriteBack}
                       disabled={!!aiProgress}
                     >
@@ -492,18 +517,21 @@ export default function App() {
                       <span className="sort-label">Sort by</span>
                       <button
                         className={`sort-btn${sortMode === "era" ? " active" : ""}`}
+                        data-tooltip="Group tracks by decade"
                         onClick={() => handleSortMode("era")}
                       >
                         Era
                       </button>
                       <button
                         className={`sort-btn${sortMode === "genre" ? " active" : ""}`}
+                        data-tooltip="Group by Spotify genre tags"
                         onClick={() => handleSortMode("genre")}
                       >
                         Genre
                       </button>
                       <button
                         className={`sort-btn ai${sortMode === "ai-genre" ? " active" : ""}`}
+                        data-tooltip="AI groups tracks into genre categories"
                         onClick={() => handleSortMode("ai-genre")}
                         disabled={!!aiProgress}
                       >
@@ -511,6 +539,7 @@ export default function App() {
                       </button>
                       <button
                         className={`sort-btn ai${sortMode === "ai-vibe" ? " active" : ""}`}
+                        data-tooltip="AI groups tracks by mood and energy"
                         onClick={() => handleSortMode("ai-vibe")}
                         disabled={!!aiProgress}
                       >
@@ -537,6 +566,7 @@ export default function App() {
                           {Object.keys(aiMap).length > 0 && (
                             <button
                               className="sort-btn ai"
+                              data-tooltip="Re-run AI with current settings"
                               onClick={async () => {
                                 setAiMap({});
                                 setAiProgress({ done: 0, total: tracks.length });
@@ -565,6 +595,7 @@ export default function App() {
                   <span className="sort-label">Export</span>
                   <button
                     className="sort-btn"
+                    data-tooltip="Download track list as CSV"
                     onClick={() => {
                       const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
                       exportCSV(tracks, groups, genreMap, aiMap, name);
@@ -574,6 +605,7 @@ export default function App() {
                   </button>
                   <button
                     className="sort-btn"
+                    data-tooltip="Download track list as Excel"
                     onClick={() => {
                       const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
                       exportExcel(tracks, groups, genreMap, aiMap, name);
