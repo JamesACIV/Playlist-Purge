@@ -310,6 +310,11 @@ export default function App() {
         <button className="theme-toggle login-theme-toggle" onClick={() => setDarkMode((d) => !d)}>
           {darkMode ? "☀︎" : "◑"}
         </button>
+        <div className="visualizer" aria-hidden="true">
+          {Array.from({ length: 28 }, (_, i) => (
+            <div key={i} className="visualizer-bar" style={{ animationDelay: `${(i * 0.08) % 1.4}s` }} />
+          ))}
+        </div>
         <h1>Playlist Purge</h1>
         <p>Sort your Spotify library. Make it yours again.</p>
         <button className="btn-connect" onClick={redirectToSpotifyLogin}>
