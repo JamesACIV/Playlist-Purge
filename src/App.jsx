@@ -11,8 +11,11 @@ import {
   addTracksToPlaylist,
   getCached,
   setCache,
+  clearCache,
+  getRateLimit,
 } from "./auth";
 import { classifyTracks } from "./ai";
+import { exportCSV, exportExcel } from "./export";
 
 const ERA_ORDER = ["Pre-80s", "80s", "90s", "2000s", "2010s", "2020s", "Unknown"];
 
@@ -72,8 +75,22 @@ export default function App() {
   const [targetGroups, setTargetGroups] = useState(5);
   const [writeProgress, setWriteProgress] = useState(null); // null | { current, total, label }
   const [createdPlaylists, setCreatedPlaylists] = useState([]);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
+  const [rateLimit, setRateLimit] = useState(() => getRateLimit());
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setRateLimit(getRateLimit());
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
   const PAGE_SIZE = 50;
   const didRun = useRef(false);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    localStorage.setItem("theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
   useEffect(() => {
     if (didRun.current) return;
@@ -96,7 +113,7 @@ export default function App() {
   async function fetchUser(token) {
     const cachedUser = getCached("user");
     const cachedPlaylists = getCached("playlists");
-    if (cachedUser && cachedPlaylists) {
+    if (cachedUser && cachedPlaylists !== null) {
       setUser(cachedUser);
       setPlaylists(cachedPlaylists);
       return;
@@ -112,7 +129,7 @@ export default function App() {
       setCache("user", data);
       setUser(data);
       const lists = await fetchPlaylists();
-      if (lists && lists.length > 0) setCache("playlists", lists);
+      setCache("playlists", lists ?? []);
       setPlaylists(lists ?? []);
     } catch {
       localStorage.removeItem("access_token");
@@ -139,36 +156,28 @@ export default function App() {
     const allItems = [];
 
     for (let i = 0; i < ownedPlaylists.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 100));
       const playlist = ownedPlaylists[i];
       setLoadingAllProgress({
         current: i + 1,
         total: ownedPlaylists.length,
         name: playlist.name,
       });
-      const { items } = await fetchTracks(playlist.id);
-      for (const item of items) {
-        const id = item.item?.id;
-        if (id && !seen.has(id)) {
+      await fetchTracks(playlist.id, (partial) => {
+        const newItems = partial.filter((item) => {
+          const id = item.item?.id;
+          if (!id || seen.has(id)) return false;
           seen.add(id);
           allItems.push(item);
-        }
-      }
-      setTracks([...allItems]);
+          return true;
+        });
+        if (newItems.length > 0) setTracks([...allItems]);
+      }, true);
     }
     setLoadingAllProgress(null);
-
     setTracks(allItems);
-
-    try {
-      const artistIds = [
-        ...new Set(allItems.map((item) => item.item?.artists?.[0]?.id).filter(Boolean)),
-      ];
-      const genres = await fetchArtists(artistIds);
-      setGenreMap(genres);
-    } finally {
-      setLoadingAll(false);
-      setLoadingTracks(false);
-    }
+    setLoadingAll(false);
+    setLoadingTracks(false);
   }
 
   async function selectPlaylist(playlist) {
@@ -184,16 +193,54 @@ export default function App() {
     setSortMode(null);
     setLoadingTracks(true);
 
-    try {
-      const { items, total } = await fetchTracks(playlist.id);
-      setTracks(items);
+    const cachedTracks = getCached(`tracks_${playlist.id}`);
+    const cachedGenres = getCached(`genres_${playlist.id}`);
+
+    if (cachedTracks) {
+      setTracks(cachedTracks.items);
       setPlaylists((prev) =>
-        prev.map((p) => p.id === playlist.id ? { ...p, trackTotal: total } : p)
+        prev.map((p) => p.id === playlist.id ? { ...p, trackTotal: cachedTracks.total } : p)
       );
+      if (cachedGenres) setGenreMap(cachedGenres);
+      setLoadingTracks(false);
+      return;
+    }
+
+    try {
+      const { items, total } = await fetchTracks(playlist.id, (partial, total) => {
+        setTracks(partial);
+        setPlaylists((prev) =>
+          prev.map((p) => p.id === playlist.id ? { ...p, trackTotal: total } : p)
+        );
+      }, true);
+      if (items.length > 0) setCache(`tracks_${playlist.id}`, { items, total });
       const artistIds = [
         ...new Set(items.map((item) => item.item?.artists?.[0]?.id).filter(Boolean)),
       ];
       const genres = await fetchArtists(artistIds);
+      if (Object.keys(genres).length > 0) setCache(`genres_${playlist.id}`, genres);
+      setGenreMap(genres);
+    } finally {
+      setLoadingTracks(false);
+    }
+  }
+
+  async function loadAllTracks() {
+    if (!selectedPlaylist || loadingTracks) return;
+    setLoadingTracks(true);
+    try {
+      const { items, total } = await fetchTracks(selectedPlaylist.id, (partial, total) => {
+        setTracks(partial);
+        setPlaylists((prev) =>
+          prev.map((p) => p.id === selectedPlaylist.id ? { ...p, trackTotal: total } : p)
+        );
+      });
+      if (items.length > 0) setCache(`tracks_${selectedPlaylist.id}`, { items, total });
+      const artistIds = [
+        ...new Set(items.map((item) => item.item?.artists?.[0]?.id).filter(Boolean)),
+      ];
+      const genres = await fetchArtists(artistIds);
+      if (Object.keys(genres).length > 0) setCache(`genres_${selectedPlaylist.id}`, genres);
       setGenreMap(genres);
     } finally {
       setLoadingTracks(false);
@@ -260,6 +307,9 @@ export default function App() {
   if (!user) {
     return (
       <div className="login-screen">
+        <button className="theme-toggle login-theme-toggle" onClick={() => setDarkMode((d) => !d)}>
+          {darkMode ? "☀︎" : "◑"}
+        </button>
         <h1>Playlist Purge</h1>
         <p>Sort your Spotify library. Make it yours again.</p>
         <button className="btn-connect" onClick={redirectToSpotifyLogin}>
@@ -275,16 +325,78 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
+        <svg className="header-topo" viewBox="0 0 1200 52" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+          <path d="M-100,130 C200,108 450,84 700,60 S1000,28 1300,8" />
+          <path d="M-100,108 C180,86 440,62 700,38 S990,6 1300,-14" />
+          <path d="M-100,86 C190,64 450,40 710,16 S1000,-16 1300,-36" />
+          <path d="M-100,64 C200,42 460,18 720,-6 S1010,-38 1300,-58" />
+          <path d="M-100,42 C210,20 470,-4 730,-28 S1020,-60 1300,-80" />
+          <path d="M-100,20 C220,-2 480,-26 740,-50 S1030,-82 1300,-102" />
+        </svg>
+        <div className="header-left">
+          {user.images?.[0]?.url && (
+            <img className="header-avatar" src={user.images[0].url} alt={user.display_name} />
+          )}
+          <div className="header-user">
+            Connected as <span>{user.display_name}</span>
+          </div>
+        </div>
         <span className="header-logo">Playlist Purge</span>
-        <div className="header-user">
-          Connected as <span>{user.display_name}</span>
+        <div className="header-right">
+          <button
+            className="theme-toggle"
+            title="Clear cache"
+            onClick={() => { clearCache(); window.location.reload(); }}
+          >
+            ↺
+          </button>
+          <button className="theme-toggle" onClick={() => setDarkMode((d) => !d)}>
+            {darkMode ? "☀︎" : "◑"}
+          </button>
         </div>
       </header>
 
+      {rateLimit && (() => {
+        const elapsed = Date.now() - rateLimit.start;
+        const total = rateLimit.until - rateLimit.start;
+        const remaining = Math.ceil((rateLimit.until - Date.now()) / 1000);
+        const pct = Math.min((elapsed / total) * 100, 100);
+        return (
+          <div className="rate-limit-banner">
+            <div className="rate-limit-bar">
+              <div className="rate-limit-fill" style={{ width: `${100 - pct}%` }} />
+            </div>
+            <span className="rate-limit-label">
+              {allPlaylistsSelected
+                ? "All Playlists"
+                : selectedPlaylist?.name
+                ? `"${selectedPlaylist.name}"`
+                : "Playlists"
+              }{" "}— rate limited, ready in {remaining}s
+            </span>
+          </div>
+        );
+      })()}
       <div className="main">
         <aside className="sidebar">
           <div className="sidebar-heading">Your Playlists</div>
           <ul className="playlist-list">
+            {playlists.length === 0 ? (
+              <li className="playlist-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Couldn't load playlists.</span>
+                <button
+                  className="sort-btn"
+                  style={{ fontSize: 11 }}
+                  onClick={() => {
+                    localStorage.removeItem("playlists");
+                    fetchUser(getAccessToken());
+                  }}
+                >
+                  Retry
+                </button>
+              </li>
+            ) : (
+              <>
             <li
               className={`playlist-item all-playlists${allPlaylistsSelected ? " active" : ""}`}
               onClick={selectAllPlaylists}
@@ -304,6 +416,8 @@ export default function App() {
                 )}
               </li>
             ))}
+              </>
+            )}
           </ul>
         </aside>
 
@@ -313,10 +427,27 @@ export default function App() {
           ) : (
             <>
               <div className="content-header">
+                <svg className="header-topo" viewBox="0 0 1200 73" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                  <path d="M-100,160 C200,136 450,110 700,84 S1000,50 1300,28" />
+                  <path d="M-100,136 C190,112 450,86 710,60 S1000,26 1300,4" />
+                  <path d="M-100,112 C200,88 460,62 720,36 S1010,2 1300,-20" />
+                  <path d="M-100,88 C210,64 470,38 730,12 S1020,-22 1300,-44" />
+                  <path d="M-100,64 C220,40 480,14 740,-12 S1030,-46 1300,-68" />
+                  <path d="M-100,40 C230,16 490,-10 750,-36 S1040,-70 1300,-92" />
+                  <path d="M-100,16 C240,-8 500,-34 760,-60 S1050,-94 1300,-116" />
+                </svg>
                 <div className="content-header-top">
-                  <h2 className="content-title">
-                    {allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name}
-                  </h2>
+                  <div className="content-title-row">
+                    <h2 className="content-title">
+                      {allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name}
+                    </h2>
+                    {!allPlaylistsSelected && !loadingTracks &&
+                      selectedPlaylist?.trackTotal > tracks.length && (
+                      <button className="sort-btn load-all-btn" onClick={loadAllTracks}>
+                        Load all {selectedPlaylist.trackTotal} tracks
+                      </button>
+                    )}
+                  </div>
                   {sortMode && !writeProgress && (
                     <button
                       className="btn-create"
@@ -399,6 +530,29 @@ export default function App() {
                   )}
                 </div>
               </div>
+              {!loadingTracks && tracks.length > 0 && (
+                <div className="export-controls">
+                  <span className="sort-label">Export</span>
+                  <button
+                    className="sort-btn"
+                    onClick={() => {
+                      const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
+                      exportCSV(tracks, groups, genreMap, aiMap, name);
+                    }}
+                  >
+                    CSV
+                  </button>
+                  <button
+                    className="sort-btn"
+                    onClick={() => {
+                      const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
+                      exportExcel(tracks, groups, genreMap, aiMap, name);
+                    }}
+                  >
+                    Excel
+                  </button>
+                </div>
+              )}
 
               {aiProgress && (
                 <div className="ai-progress">
@@ -417,7 +571,7 @@ export default function App() {
                   <div className="ai-progress-bar">
                     <div
                       className="ai-progress-fill"
-                      style={{ width: `${(writeProgress.current / writeProgress.total) * 100}%`, background: "var(--green)" }}
+                      style={{ width: `${(writeProgress.current / writeProgress.total) * 100}%` }}
                     />
                   </div>
                   <span>Creating "{writeProgress.label}" ({writeProgress.current}/{writeProgress.total})</span>

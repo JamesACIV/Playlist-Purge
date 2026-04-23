@@ -116,7 +116,7 @@ export async function getValidToken() {
   return getAccessToken();
 }
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
 export function getCached(key) {
   try {
@@ -134,7 +134,35 @@ export function setCache(key, data) {
   localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }));
 }
 
+export function setRateLimit(retryAfterSeconds) {
+  const newUntil = Date.now() + Math.max(retryAfterSeconds, 5) * 1000;
+  const existing = getRateLimit();
+  if (existing && existing.until >= newUntil) return;
+  const start = existing?.start ?? Date.now();
+  localStorage.setItem("rate_limit", JSON.stringify({ start, until: newUntil }));
+}
+
+export function getRateLimit() {
+  try {
+    const raw = localStorage.getItem("rate_limit");
+    if (!raw) return null;
+    const { start, until } = JSON.parse(raw);
+    if (Date.now() >= until) return null;
+    return { start, until };
+  } catch {
+    return null;
+  }
+}
+
+export function clearCache() {
+  const keep = new Set(["access_token", "refresh_token", "token_expires", "verifier", "theme"]);
+  Object.keys(localStorage).forEach((key) => {
+    if (!keep.has(key)) localStorage.removeItem(key);
+  });
+}
+
 export async function fetchPlaylists() {
+  if (getRateLimit()) return [];
   const token = await getValidToken();
   const allItems = [];
   let url = "https://api.spotify.com/v1/me/playlists?limit=50";
@@ -145,9 +173,12 @@ export async function fetchPlaylists() {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.status === 429) {
+      const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 5), 5);
+      setRateLimit(retryAfter);
+      if (allItems.length === 0) setCache("playlists", []);
       if (retries >= 3) break;
       retries++;
-      const wait = Math.max(Number(res.headers.get("Retry-After") ?? 5), 5) * 1000;
+      const wait = retryAfter * 1000;
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
@@ -162,9 +193,11 @@ export async function fetchPlaylists() {
 }
 
 export async function fetchArtists(artistIds) {
+  if (getRateLimit()) return {};
   const token = await getValidToken();
   const genreMap = {};
   for (let i = 0; i < artistIds.length; i += 50) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 50));
     const batch = artistIds.slice(i, i + 50);
     const res = await fetch(
       `https://api.spotify.com/v1/artists?ids=${batch.join(",")}`,
@@ -217,15 +250,32 @@ export async function addTracksToPlaylist(playlistId, uris) {
   }
 }
 
-export async function fetchTracks(playlistId) {
+export async function fetchTracks(playlistId, onPage, shallow = false) {
+  if (getRateLimit()) return { items: [], total: 0, next: null };
   const token = await getValidToken();
   const allItems = [];
 
-  // First page via full playlist endpoint
-  const res = await fetch(
-    `https://api.spotify.com/v1/playlists/${playlistId}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  let res;
+  let retries = 0;
+  while (true) {
+    res = await fetch(
+      `https://api.spotify.com/v1/playlists/${playlistId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (res.status === 429) {
+      const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 5), 5);
+      setRateLimit(retryAfter);
+      if (retries >= 2) return { items: [], total: 0 };
+      retries++;
+      const wait = retryAfter * 1000;
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    break;
+  }
+
+  if (!res.ok) return { items: [], total: 0 };
+
   const data = await res.json();
   const page = data.tracks ?? data.items;
   const firstItems = Array.isArray(page) ? page : (page?.items ?? []);
@@ -233,18 +283,33 @@ export async function fetchTracks(playlistId) {
   let next = Array.isArray(page) ? null : (page?.next ?? null);
 
   allItems.push(...firstItems);
+  if (onPage) onPage([...allItems], total);
 
-  // Follow pagination for subsequent pages
+  if (shallow) return { items: allItems, total, next };
+
+  let pageRetries = 0;
   while (next) {
+    await new Promise((r) => setTimeout(r, 50));
     try {
       const nextRes = await fetch(next, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (nextRes.status === 429) {
+        const retryAfter = Math.max(Number(nextRes.headers.get("Retry-After") ?? 5), 5);
+        setRateLimit(retryAfter);
+        if (pageRetries >= 2) break;
+        pageRetries++;
+        const wait = retryAfter * 1000;
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
       if (!nextRes.ok) break;
+      pageRetries = 0;
       const nextData = await nextRes.json();
       if (nextData.error) break;
       allItems.push(...(nextData.items ?? []));
       next = nextData.next ?? null;
+      if (onPage) onPage([...allItems], total);
     } catch {
       break;
     }

@@ -1,22 +1,34 @@
-:root {
-  --bg-base:      #121212;
-  --bg-surface:   #181818;
-  --bg-elevated:  #242424;
-  --bg-hover:     #2a2a2a;
-  --green:        #1DB954;
-  --green-muted:  rgba(29, 185, 84, 0.12);
-  --text:         #ffffff;
-  --text-sub:     #b3b3b3;
-  --text-dim:     #535353;
-  --border:       rgba(255, 255, 255, 0.08);
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-  font-family: 'Circular', 'Inter', system-ui, -apple-system, sans-serif;
+:root {
+  --bg-base:      #ffffff;
+  --bg-surface:   #f5f5f5;
+  --bg-elevated:  #f5f2ef;
+  --bg-warm:      rgba(245, 242, 239, 0.8);
+  --bg-hover:     rgba(0, 0, 0, 0.03);
+
+  --text:         #000000;
+  --text-sub:     #4e4e4e;
+  --text-dim:     #777169;
+
+  --border:       #e5e5e5;
+  --border-sub:   rgba(0, 0, 0, 0.05);
+
+  --shadow-card:  rgba(0,0,0,0.06) 0px 0px 0px 1px,
+                  rgba(0,0,0,0.04) 0px 1px 2px,
+                  rgba(0,0,0,0.04) 0px 2px 4px;
+  --shadow-warm:  rgba(78, 50, 23, 0.04) 0px 6px 16px;
+  --shadow-btn:   rgba(0,0,0,0.4) 0px 0px 1px,
+                  rgba(0,0,0,0.04) 0px 4px 4px;
+  --shadow-inset: rgba(0,0,0,0.075) 0px 0px 0px 0.5px inset;
+
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
   background: var(--bg-base);
   -webkit-font-smoothing: antialiased;
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 *, *::before, *::after {
@@ -37,14 +49,39 @@ body {
 }
 
 h1, h2, h3 {
-  font-weight: 700;
+  font-weight: 300;
   color: var(--text);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
 p { margin: 0; }
 
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--text-dim); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-sub); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #ccc; }
+
+[data-theme="dark"] {
+  --bg-base:      #0f0f0f;
+  --bg-surface:   #1a1a1a;
+  --bg-elevated:  #222222;
+  --bg-warm:      rgba(40, 30, 18, 0.9);
+  --bg-hover:     rgba(255, 255, 255, 0.04);
+
+  --text:         #f0ece8;
+  --text-sub:     #a09890;
+  --text-dim:     #5a5248;
+
+  --border:       rgba(255, 255, 255, 0.1);
+  --border-sub:   rgba(255, 255, 255, 0.06);
+
+  --shadow-card:  rgba(0,0,0,0.4) 0px 0px 0px 1px,
+                  rgba(0,0,0,0.2) 0px 1px 2px,
+                  rgba(0,0,0,0.2) 0px 2px 4px;
+  --shadow-warm:  rgba(180, 130, 70, 0.08) 0px 6px 16px;
+  --shadow-btn:   rgba(0,0,0,0.6) 0px 0px 1px,
+                  rgba(0,0,0,0.3) 0px 4px 8px;
+  --shadow-inset: rgba(255,255,255,0.06) 0px 0px 0px 0.5px inset;
+
+  color-scheme: dark;
+}
