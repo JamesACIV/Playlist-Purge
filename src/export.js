@@ -32,7 +32,7 @@ function buildRows(tracks, groups, genreMap, aiMap) {
 }
 
 function safeName(name) {
-  return name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 100);
+  return (name || "playlist").replace(/[\\/:*?"<>|]/g, "_").slice(0, 100);
 }
 
 export function exportCSV(tracks, groups, genreMap, aiMap, name) {

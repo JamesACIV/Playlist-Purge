@@ -62,6 +62,7 @@ export async function exchangeCodeForToken(code) {
 
   const data = await response.json();
   if (!data.access_token) return null;
+  console.log("Token granted scopes:", data.scope);
   localStorage.setItem("access_token", data.access_token);
   if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
   if (data.expires_in) {
@@ -113,7 +114,9 @@ export async function getValidToken() {
     const newToken = await refreshAccessToken();
     if (newToken) return newToken;
   }
-  return getAccessToken();
+  const token = getAccessToken();
+  console.log("getValidToken:", token ? token.slice(0, 20) + "..." : "null");
+  return token;
 }
 
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
@@ -125,6 +128,17 @@ export function getCached(key) {
     const { data, ts } = JSON.parse(raw);
     if (Date.now() - ts > CACHE_TTL) return null;
     return data;
+  } catch {
+    return null;
+  }
+}
+
+export function getStaleCached(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { data } = JSON.parse(raw);
+    return data ?? null;
   } catch {
     return null;
   }
@@ -155,10 +169,16 @@ export function getRateLimit() {
 }
 
 export function clearCache() {
-  const keep = new Set(["access_token", "refresh_token", "token_expires", "verifier", "theme"]);
+  const keep = new Set(["access_token", "refresh_token", "token_expires", "verifier", "theme", "rate_limit"]);
   Object.keys(localStorage).forEach((key) => {
     if (!keep.has(key)) localStorage.removeItem(key);
   });
+}
+
+export function clearAiCache() {
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("ai_"))
+    .forEach((k) => localStorage.removeItem(k));
 }
 
 export async function fetchPlaylists() {
@@ -166,23 +186,17 @@ export async function fetchPlaylists() {
   const token = await getValidToken();
   const allItems = [];
   let url = "https://api.spotify.com/v1/me/playlists?limit=50";
-  let retries = 0;
 
   while (url) {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.status === 429) {
-      const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 5), 5);
+      const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 300), 300);
       setRateLimit(retryAfter);
-      if (allItems.length === 0) setCache("playlists", []);
-      if (retries >= 3) break;
-      retries++;
-      const wait = retryAfter * 1000;
-      await new Promise((r) => setTimeout(r, wait));
-      continue;
+      break;
     }
-    retries = 0;
+    if (!res.ok) break;
     const data = await res.json();
     if (data.error || !data.items) break;
     allItems.push(...data.items);
@@ -203,6 +217,12 @@ export async function fetchArtists(artistIds) {
       `https://api.spotify.com/v1/artists?ids=${batch.join(",")}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
+    if (res.status === 429) {
+      const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 300), 300);
+      setRateLimit(retryAfter);
+      break;
+    }
+    if (!res.ok) break;
     const data = await res.json();
     (data.artists ?? []).forEach((a) => {
       if (a?.id) genreMap[a.id] = a.genres?.[0] ?? "—";
@@ -211,27 +231,30 @@ export async function fetchArtists(artistIds) {
   return genreMap;
 }
 
-export async function fetchAudioFeatures(trackIds) {
+
+export async function deletePlaylist(playlistId) {
   const token = await getValidToken();
-  const ids = trackIds.join(",");
-  const res = await fetch(
-    `https://api.spotify.com/v1/audio-features?ids=${ids}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  const data = await res.json();
-  return data.audio_features ?? [];
+  await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/followers`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
 
 export async function createPlaylist(userId, name, description = "") {
   const token = await getValidToken();
-  const res = await fetch(`https://api.spotify.com/v1/users/${userId}/playlists`, {
+  const res = await fetch(`https://api.spotify.com/v1/me/playlists`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ name, description, public: false }),
+    body: JSON.stringify({ name, description, public: true }),
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    console.error("createPlaylist failed", res.status, err);
+    throw new Error(`${res.status}: ${err?.error?.message ?? "Failed to create playlist"}`);
+  }
   return await res.json();
 }
 
@@ -239,7 +262,8 @@ export async function addTracksToPlaylist(playlistId, uris) {
   const token = await getValidToken();
   for (let i = 0; i < uris.length; i += 100) {
     const batch = uris.slice(i, i + 100);
-    await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+    console.log("addTracksToPlaylist sending", batch.slice(0, 3), "...");
+    const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -247,6 +271,11 @@ export async function addTracksToPlaylist(playlistId, uris) {
       },
       body: JSON.stringify({ uris: batch }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error("addTracksToPlaylist failed", res.status, JSON.stringify(err));
+      throw new Error(`${res.status}: ${err?.error?.message ?? "Failed to add tracks"}`);
+    }
   }
 }
 
@@ -255,23 +284,14 @@ export async function fetchTracks(playlistId, onPage, shallow = false) {
   const token = await getValidToken();
   const allItems = [];
 
-  let res;
-  let retries = 0;
-  while (true) {
-    res = await fetch(
-      `https://api.spotify.com/v1/playlists/${playlistId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (res.status === 429) {
-      const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 5), 5);
-      setRateLimit(retryAfter);
-      if (retries >= 2) return { items: [], total: 0 };
-      retries++;
-      const wait = retryAfter * 1000;
-      await new Promise((r) => setTimeout(r, wait));
-      continue;
-    }
-    break;
+  const res = await fetch(
+    `https://api.spotify.com/v1/playlists/${playlistId}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (res.status === 429) {
+    const retryAfter = Math.max(Number(res.headers.get("Retry-After") ?? 300), 300);
+    setRateLimit(retryAfter);
+    return { items: [], total: 0 };
   }
 
   if (!res.ok) return { items: [], total: 0 };
@@ -287,7 +307,6 @@ export async function fetchTracks(playlistId, onPage, shallow = false) {
 
   if (shallow) return { items: allItems, total, next };
 
-  let pageRetries = 0;
   while (next) {
     await new Promise((r) => setTimeout(r, 50));
     try {
@@ -295,16 +314,11 @@ export async function fetchTracks(playlistId, onPage, shallow = false) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (nextRes.status === 429) {
-        const retryAfter = Math.max(Number(nextRes.headers.get("Retry-After") ?? 5), 5);
+        const retryAfter = Math.max(Number(nextRes.headers.get("Retry-After") ?? 300), 300);
         setRateLimit(retryAfter);
-        if (pageRetries >= 2) break;
-        pageRetries++;
-        const wait = retryAfter * 1000;
-        await new Promise((r) => setTimeout(r, wait));
-        continue;
+        break;
       }
       if (!nextRes.ok) break;
-      pageRetries = 0;
       const nextData = await nextRes.json();
       if (nextData.error) break;
       allItems.push(...(nextData.items ?? []));

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import "./App.css";
 import {
   redirectToSpotifyLogin,
@@ -8,14 +8,15 @@ import {
   fetchTracks,
   fetchArtists,
   createPlaylist,
+  deletePlaylist,
   addTracksToPlaylist,
   getCached,
+  getStaleCached,
   setCache,
-  clearCache,
   getRateLimit,
 } from "./auth";
-import { classifyTracks } from "./ai";
-import { exportCSV, exportExcel } from "./export";
+import { classifyTracks, PRESET_GENRES } from "./ai";
+import { exportCSV } from "./export";
 
 const ERA_ORDER = ["Pre-80s", "80s", "90s", "2000s", "2010s", "2020s", "Unknown"];
 
@@ -75,8 +76,9 @@ export default function App() {
   const [targetGroups, setTargetGroups] = useState(5);
   const [writeProgress, setWriteProgress] = useState(null); // null | { current, total, label }
   const [createdPlaylists, setCreatedPlaylists] = useState([]);
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
+  const [writeError, setWriteError] = useState(null);
   const [rateLimit, setRateLimit] = useState(() => getRateLimit());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -88,9 +90,8 @@ export default function App() {
   const didRun = useRef(false);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
-    localStorage.setItem("theme", darkMode ? "dark" : "light");
-  }, [darkMode]);
+    document.documentElement.setAttribute("data-theme", "dark");
+  }, []);
 
   useEffect(() => {
     if (didRun.current) return;
@@ -119,6 +120,16 @@ export default function App() {
       return;
     }
 
+    if (getRateLimit()) {
+      const staleUser = cachedUser ?? getStaleCached("user");
+      const stalePlaylists = cachedPlaylists ?? getStaleCached("playlists");
+      if (staleUser) {
+        setUser(staleUser);
+        setPlaylists(stalePlaylists ?? []);
+        return;
+      }
+    }
+
     try {
       const res = await fetch("https://api.spotify.com/v1/me", {
         headers: { Authorization: `Bearer ${token}` },
@@ -129,8 +140,13 @@ export default function App() {
       setCache("user", data);
       setUser(data);
       const lists = await fetchPlaylists();
-      setCache("playlists", lists ?? []);
-      setPlaylists(lists ?? []);
+      if (lists.length > 0) {
+        setCache("playlists", lists);
+        setPlaylists(lists);
+      } else {
+        const stalePlaylists = getStaleCached("playlists");
+        setPlaylists(stalePlaylists ?? []);
+      }
     } catch {
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");
@@ -151,33 +167,35 @@ export default function App() {
     setSortMode(null);
     setLoadingAll(true);
 
-    const ownedPlaylists = playlists.filter((p) => p.owner?.id === user.id);
     const seen = new Set();
     const allItems = [];
 
-    for (let i = 0; i < ownedPlaylists.length; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, 100));
-      const playlist = ownedPlaylists[i];
-      setLoadingAllProgress({
-        current: i + 1,
-        total: ownedPlaylists.length,
-        name: playlist.name,
-      });
-      await fetchTracks(playlist.id, (partial) => {
-        const newItems = partial.filter((item) => {
-          const id = item.item?.id;
-          if (!id || seen.has(id)) return false;
-          seen.add(id);
-          allItems.push(item);
-          return true;
+    try {
+      for (let i = 0; i < ownedPlaylists.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 100));
+        const playlist = ownedPlaylists[i];
+        setLoadingAllProgress({
+          current: i + 1,
+          total: ownedPlaylists.length,
+          name: playlist.name,
         });
-        if (newItems.length > 0) setTracks([...allItems]);
-      }, true);
+        await fetchTracks(playlist.id, (partial) => {
+          const newItems = partial.filter((item) => {
+            const id = item.item?.id;
+            if (!id || seen.has(id)) return false;
+            seen.add(id);
+            allItems.push(item);
+            return true;
+          });
+          if (newItems.length > 0) setTracks([...allItems]);
+        });
+      }
+    } finally {
+      setLoadingAllProgress(null);
+      setTracks([...allItems]);
+      setLoadingAll(false);
+      setLoadingTracks(false);
     }
-    setLoadingAllProgress(null);
-    setTracks(allItems);
-    setLoadingAll(false);
-    setLoadingTracks(false);
   }
 
   async function selectPlaylist(playlist) {
@@ -193,8 +211,8 @@ export default function App() {
     setSortMode(null);
     setLoadingTracks(true);
 
-    const cachedTracks = getCached(`tracks_${playlist.id}`);
-    const cachedGenres = getCached(`genres_${playlist.id}`);
+    const cachedTracks = getCached(`tracks_${playlist.id}`) ?? getStaleCached(`tracks_${playlist.id}`);
+    const cachedGenres = getCached(`genres_${playlist.id}`) ?? getStaleCached(`genres_${playlist.id}`);
 
     if (cachedTracks) {
       setTracks(cachedTracks.items);
@@ -220,6 +238,8 @@ export default function App() {
       const genres = await fetchArtists(artistIds);
       if (Object.keys(genres).length > 0) setCache(`genres_${playlist.id}`, genres);
       setGenreMap(genres);
+    } catch {
+      // network error — tracks already shown if partial load succeeded
     } finally {
       setLoadingTracks(false);
     }
@@ -242,9 +262,16 @@ export default function App() {
       const genres = await fetchArtists(artistIds);
       if (Object.keys(genres).length > 0) setCache(`genres_${selectedPlaylist.id}`, genres);
       setGenreMap(genres);
+    } catch {
+      // network error — tracks already shown if partial load succeeded
     } finally {
       setLoadingTracks(false);
     }
+  }
+
+  function aiCacheKey(mode) {
+    const id = allPlaylistsSelected ? "all" : selectedPlaylist?.id;
+    return `ai_${mode}_${id}`;
   }
 
   async function handleSortMode(mode) {
@@ -253,12 +280,19 @@ export default function App() {
     setCurrentPage(1);
 
     if ((next === "ai-genre" || next === "ai-vibe") && Object.keys(aiMap).length === 0) {
+      const cached = getCached(aiCacheKey(next)) ?? getStaleCached(aiCacheKey(next));
+      if (cached) {
+        setAiMap(cached);
+        return;
+      }
+
       setAiProgress({ done: 0, total: tracks.length });
       try {
         const results = await classifyTracks(tracks, (done, total) => {
           setAiProgress({ done, total });
         }, next, targetGroups);
         setAiMap(results);
+        setCache(aiCacheKey(next), results);
       } catch {
         // Classification failed — leave aiMap empty, groups show as Unknown
       } finally {
@@ -270,39 +304,57 @@ export default function App() {
   async function handleWriteBack() {
     if (!groups) return;
     setCreatedPlaylists([]);
+    setWriteError(null);
     const groupEntries = Object.entries(groups);
     const created = [];
 
-    for (let i = 0; i < groupEntries.length; i++) {
-      const [label, groupTracks] = groupEntries[i];
-      setWriteProgress({ current: i + 1, total: groupEntries.length, label });
+    try {
+      for (let i = 0; i < groupEntries.length; i++) {
+        const [label, groupTracks] = groupEntries[i];
+        setWriteProgress({ current: i + 1, total: groupEntries.length, label });
 
-      const baseName = allPlaylistsSelected ? "Purge" : selectedPlaylist.name;
-      const playlist = await createPlaylist(
-        user.id,
-        `${baseName} — ${label}`,
-        `Created by Playlist Purge`
-      );
+        const baseName = allPlaylistsSelected ? "Purge" : selectedPlaylist.name;
+        const playlist = await createPlaylist(
+          user.id,
+          `PP | ${baseName} — ${label}`,
+          `Created by Playlist Purge`
+        );
 
-      const uris = groupTracks
-        .map((item) => item.item?.uri)
-        .filter((uri) => uri && !uri.startsWith("spotify:local"));
+        const uris = groupTracks
+          .map((item) => item.item?.uri)
+          .filter((uri) => uri?.startsWith("spotify:track:"));
 
-      if (uris.length > 0) {
+        if (uris.length === 0) {
+          await deletePlaylist(playlist.id);
+          continue;
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
         await addTracksToPlaylist(playlist.id, uris);
+
+        created.push({
+          label,
+          name: playlist.name,
+          url: playlist.external_urls?.spotify,
+          count: uris.length,
+        });
       }
-
-      created.push({
-        label,
-        name: playlist.name,
-        url: playlist.external_urls?.spotify,
-        count: uris.length,
-      });
+    } catch (err) {
+      setWriteError(`Spotify error: ${err?.message ?? "Unknown error"}`);
+    } finally {
+      setCreatedPlaylists(created);
+      setWriteProgress(null);
     }
-
-    setCreatedPlaylists(created);
-    setWriteProgress(null);
   }
+
+  const ownedPlaylists = useMemo(
+    () => user ? playlists.filter((p) => p.owner?.id === user.id) : [],
+    [playlists, user]
+  );
+  const groups = useMemo(
+    () => sortMode ? groupTracks(tracks, sortMode, genreMap, aiMap) : null,
+    [tracks, sortMode, genreMap, aiMap]
+  );
 
   if (!user) {
     return (
@@ -317,9 +369,6 @@ export default function App() {
           <path d="M-100,1000 C200,900 500,760 800,620 S1200,420 1600,300" />
           <path d="M-100,1120 C200,1020 500,880 800,740 S1200,540 1600,420" />
         </svg>
-        <button className="theme-toggle login-theme-toggle" onClick={() => setDarkMode((d) => !d)}>
-          {darkMode ? "☀︎" : "◑"}
-        </button>
         <div className="login-content">
           <div className="visualizer" aria-hidden="true">
             {Array.from({ length: 36 }, (_, i) => (
@@ -363,9 +412,6 @@ export default function App() {
     didRun.current = false;
   }
 
-  const ownedPlaylists = playlists.filter((p) => p.owner?.id === user.id);
-  const groups = sortMode ? groupTracks(tracks, sortMode, genreMap, aiMap) : null;
-
   return (
     <div className="app">
       <header className="header">
@@ -387,20 +433,18 @@ export default function App() {
         </div>
         <span className="header-logo">Playlist Purge</span>
         <div className="header-right">
-          <button
-            className="theme-toggle"
-            data-tooltip="Clear cache"
-            onClick={() => { clearCache(); window.location.reload(); }}
-          >
-            ↺
-          </button>
-          <button
-            className="theme-toggle"
-            data-tooltip={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-            onClick={() => setDarkMode((d) => !d)}
-          >
-            {darkMode ? "☀︎" : "◑"}
-          </button>
+          {!loadingTracks && tracks.length > 0 && (
+            <button
+              className="logout-btn"
+              data-tooltip="Download track list as CSV"
+              onClick={() => {
+                const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
+                exportCSV(tracks, groups, genreMap, aiMap, name);
+              }}
+            >
+              Export CSV
+            </button>
+          )}
           <button className="logout-btn" data-tooltip="Sign out of Spotify" onClick={logout}>Log out</button>
         </div>
       </header>
@@ -427,7 +471,7 @@ export default function App() {
         );
       })()}
       <div className="main">
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}>
           <div className="sidebar-heading">Your Playlists</div>
           <ul className="playlist-list">
             {playlists.length === 0 ? (
@@ -470,6 +514,13 @@ export default function App() {
             )}
           </ul>
         </aside>
+        <button
+          className={`sidebar-toggle${sidebarCollapsed ? " collapsed" : ""}`}
+          onClick={() => setSidebarCollapsed((c) => !c)}
+          aria-label={sidebarCollapsed ? "Show playlists" : "Hide playlists"}
+        >
+          {sidebarCollapsed ? "›" : "‹"}
+        </button>
 
         <div className="content">
           {!selectedPlaylist && !allPlaylistsSelected ? (
@@ -523,15 +574,8 @@ export default function App() {
                         Era
                       </button>
                       <button
-                        className={`sort-btn${sortMode === "genre" ? " active" : ""}`}
-                        data-tooltip="Group by Spotify genre tags"
-                        onClick={() => handleSortMode("genre")}
-                      >
-                        Genre
-                      </button>
-                      <button
                         className={`sort-btn ai${sortMode === "ai-genre" ? " active" : ""}`}
-                        data-tooltip="AI groups tracks into genre categories"
+                        data-tooltip={`Sorts into: ${PRESET_GENRES.join(", ")}`}
                         onClick={() => handleSortMode("ai-genre")}
                         disabled={!!aiProgress}
                       >
@@ -539,35 +583,40 @@ export default function App() {
                       </button>
                       <button
                         className={`sort-btn ai${sortMode === "ai-vibe" ? " active" : ""}`}
-                        data-tooltip="AI groups tracks by mood and energy"
+                        data-tooltip="AI groups tracks by energy and tempo feel"
                         onClick={() => handleSortMode("ai-vibe")}
                         disabled={!!aiProgress}
                       >
-                        AI Vibe
+                        Energy
                       </button>
                       {(sortMode === "ai-genre" || sortMode === "ai-vibe") && (
                         <>
-                          <div className="sort-divider" />
-                          <label className="sort-label" htmlFor="target-groups">Playlists</label>
-                          <select
-                            id="target-groups"
-                            className="groups-select"
-                            value={targetGroups}
-                            onChange={(e) => {
-                              setTargetGroups(Number(e.target.value));
-                              setAiMap({});
-                            }}
-                            disabled={!!aiProgress}
-                          >
-                            {Array.from({ length: 14 }, (_, i) => i + 2).map((n) => (
-                              <option key={n} value={n}>{n}</option>
-                            ))}
-                          </select>
+                          {sortMode === "ai-vibe" && (
+                            <>
+                              <div className="sort-divider" />
+                              <label className="sort-label" htmlFor="target-groups">Playlists</label>
+                              <select
+                                id="target-groups"
+                                className="groups-select"
+                                value={targetGroups}
+                                onChange={(e) => {
+                                  setTargetGroups(Number(e.target.value));
+                                  setAiMap({});
+                                }}
+                                disabled={!!aiProgress}
+                              >
+                                {Array.from({ length: 14 }, (_, i) => i + 2).map((n) => (
+                                  <option key={n} value={n}>{n}</option>
+                                ))}
+                              </select>
+                            </>
+                          )}
                           {Object.keys(aiMap).length > 0 && (
                             <button
                               className="sort-btn ai"
                               data-tooltip="Re-run AI with current settings"
                               onClick={async () => {
+                                localStorage.removeItem(aiCacheKey(sortMode));
                                 setAiMap({});
                                 setAiProgress({ done: 0, total: tracks.length });
                                 const results = await classifyTracks(
@@ -577,6 +626,7 @@ export default function App() {
                                   targetGroups
                                 );
                                 setAiMap(results);
+                                setCache(aiCacheKey(sortMode), results);
                                 setAiProgress(null);
                               }}
                               disabled={!!aiProgress}
@@ -590,32 +640,6 @@ export default function App() {
                   )}
                 </div>
               </div>
-              {!loadingTracks && tracks.length > 0 && (
-                <div className="export-controls">
-                  <span className="sort-label">Export</span>
-                  <button
-                    className="sort-btn"
-                    data-tooltip="Download track list as CSV"
-                    onClick={() => {
-                      const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
-                      exportCSV(tracks, groups, genreMap, aiMap, name);
-                    }}
-                  >
-                    CSV
-                  </button>
-                  <button
-                    className="sort-btn"
-                    data-tooltip="Download track list as Excel"
-                    onClick={() => {
-                      const name = allPlaylistsSelected ? "All Playlists" : selectedPlaylist.name;
-                      exportExcel(tracks, groups, genreMap, aiMap, name);
-                    }}
-                  >
-                    Excel
-                  </button>
-                </div>
-              )}
-
               {aiProgress && (
                 <div className="ai-progress">
                   <div className="ai-progress-bar">
@@ -624,7 +648,7 @@ export default function App() {
                       style={{ width: `${(aiProgress.done / aiProgress.total) * 100}%` }}
                     />
                   </div>
-                  <span>Classifying with AI… {aiProgress.done}/{aiProgress.total}</span>
+                  <span>Classifying artists… {aiProgress.done}/{aiProgress.total}</span>
                 </div>
               )}
 
@@ -640,21 +664,30 @@ export default function App() {
                 </div>
               )}
 
+              {writeError && (
+                <div className="write-error">
+                  {writeError}
+                </div>
+              )}
+
               {createdPlaylists.length > 0 && (
                 <div className="created-playlists">
-                  <span className="created-title">Playlists created</span>
-                  {createdPlaylists.map((p) => (
-                    <a
-                      key={p.label}
-                      href={p.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="created-link"
-                    >
-                      <span>{p.name}</span>
-                      <span className="created-count">{p.count} tracks</span>
-                    </a>
-                  ))}
+                  <span className="created-title">Saved to Spotify</span>
+                  <div className="created-grid">
+                    {createdPlaylists.map((p) => (
+                      <a
+                        key={p.label}
+                        href={p.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="created-card"
+                      >
+                        <span className="created-card-label">{p.label}</span>
+                        <span className="created-card-count">{p.count} tracks</span>
+                        <span className="created-card-arrow">↗</span>
+                      </a>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -762,15 +795,23 @@ export default function App() {
                       </table>
                       {totalPages > 1 && (
                         <div className="pagination">
-                          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                            <button
-                              key={page}
-                              className={`page-btn${currentPage === page ? " active" : ""}`}
-                              onClick={() => setCurrentPage(page)}
-                            >
-                              {page}
-                            </button>
-                          ))}
+                          <button
+                            className="page-btn"
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            disabled={currentPage === 1}
+                          >
+                            ←
+                          </button>
+                          <span className="page-label">
+                            {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, tracks.length)} of {tracks.length}
+                          </span>
+                          <button
+                            className="page-btn"
+                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                            disabled={currentPage === totalPages}
+                          >
+                            →
+                          </button>
                         </div>
                       )}
                     </>
