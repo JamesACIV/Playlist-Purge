@@ -266,7 +266,7 @@ export async function createPlaylist(userId, name, description = "") {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ name, description, public: true }),
+    body: JSON.stringify({ name, description, public: false }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
