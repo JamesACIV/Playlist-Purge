@@ -27,8 +27,10 @@ async function generateCodeChallenge(verifier) {
 
 export async function redirectToSpotifyLogin() {
   const verifier = generateRandomString(128);
+  const state = generateRandomString(16);
   const challenge = await generateCodeChallenge(verifier);
   localStorage.setItem("verifier", verifier);
+  localStorage.setItem("oauth_state", state);
 
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -37,13 +39,18 @@ export async function redirectToSpotifyLogin() {
     scope: SCOPES,
     code_challenge_method: "S256",
     code_challenge: challenge,
+    state,
     show_dialog: true,
   });
 
   window.location = `https://accounts.spotify.com/authorize?${params.toString()}`;
 }
 
-export async function exchangeCodeForToken(code) {
+export async function exchangeCodeForToken(code, returnedState) {
+  const expectedState = localStorage.getItem("oauth_state");
+  localStorage.removeItem("oauth_state");
+  if (expectedState && returnedState !== expectedState) return null;
+
   const verifier = localStorage.getItem("verifier");
 
   const body = new URLSearchParams({
@@ -62,7 +69,6 @@ export async function exchangeCodeForToken(code) {
 
   const data = await response.json();
   if (!data.access_token) return null;
-  console.log("Token granted scopes:", data.scope);
   localStorage.setItem("access_token", data.access_token);
   if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
   if (data.expires_in) {
@@ -114,9 +120,7 @@ export async function getValidToken() {
     const newToken = await refreshAccessToken();
     if (newToken) return newToken;
   }
-  const token = getAccessToken();
-  console.log("getValidToken:", token ? token.slice(0, 20) + "..." : "null");
-  return token;
+  return getAccessToken();
 }
 
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
@@ -145,7 +149,21 @@ export function getStaleCached(key) {
 }
 
 export function setCache(key, data) {
-  localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }));
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }));
+  } catch {
+    // localStorage full — evict oldest track/genre/ai cache entries and retry
+    const evictable = Object.keys(localStorage).filter((k) =>
+      k.startsWith("tracks_") || k.startsWith("genres_") || k.startsWith("ai_")
+    );
+    if (evictable.length > 0) {
+      evictable.sort((a, b) => {
+        try { return (JSON.parse(localStorage.getItem(a))?.ts ?? 0) - (JSON.parse(localStorage.getItem(b))?.ts ?? 0); } catch { return 0; }
+      });
+      localStorage.removeItem(evictable[0]);
+      try { localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })); } catch { /* give up */ }
+    }
+  }
 }
 
 export function setRateLimit(retryAfterSeconds) {
@@ -252,7 +270,6 @@ export async function createPlaylist(userId, name, description = "") {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    console.error("createPlaylist failed", res.status, err);
     throw new Error(`${res.status}: ${err?.error?.message ?? "Failed to create playlist"}`);
   }
   return await res.json();
@@ -262,7 +279,6 @@ export async function addTracksToPlaylist(playlistId, uris) {
   const token = await getValidToken();
   for (let i = 0; i < uris.length; i += 100) {
     const batch = uris.slice(i, i + 100);
-    console.log("addTracksToPlaylist sending", batch.slice(0, 3), "...");
     const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items`, {
       method: "POST",
       headers: {
@@ -273,7 +289,6 @@ export async function addTracksToPlaylist(playlistId, uris) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      console.error("addTracksToPlaylist failed", res.status, JSON.stringify(err));
       throw new Error(`${res.status}: ${err?.error?.message ?? "Failed to add tracks"}`);
     }
   }

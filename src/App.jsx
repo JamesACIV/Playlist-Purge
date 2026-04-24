@@ -88,6 +88,7 @@ export default function App() {
   }, []);
   const PAGE_SIZE = 50;
   const didRun = useRef(false);
+  const activePlaylistId = useRef(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -99,10 +100,11 @@ export default function App() {
 
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
+    const state = params.get("state");
     const token = getAccessToken();
 
     if (code) {
-      exchangeCodeForToken(code).then((newToken) => {
+      exchangeCodeForToken(code, state).then((newToken) => {
         window.history.replaceState({}, document.title, "/");
         if (newToken) fetchUser(newToken);
       });
@@ -199,6 +201,7 @@ export default function App() {
   }
 
   async function selectPlaylist(playlist) {
+    activePlaylistId.current = playlist.id;
     setAllPlaylistsSelected(false);
     setSelectedPlaylist(playlist);
     setTracks([]);
@@ -215,6 +218,7 @@ export default function App() {
     const cachedGenres = getCached(`genres_${playlist.id}`) ?? getStaleCached(`genres_${playlist.id}`);
 
     if (cachedTracks) {
+      if (activePlaylistId.current !== playlist.id) return;
       setTracks(cachedTracks.items);
       setPlaylists((prev) =>
         prev.map((p) => p.id === playlist.id ? { ...p, trackTotal: cachedTracks.total } : p)
@@ -226,22 +230,25 @@ export default function App() {
 
     try {
       const { items, total } = await fetchTracks(playlist.id, (partial, total) => {
+        if (activePlaylistId.current !== playlist.id) return;
         setTracks(partial);
         setPlaylists((prev) =>
           prev.map((p) => p.id === playlist.id ? { ...p, trackTotal: total } : p)
         );
       }, true);
+      if (activePlaylistId.current !== playlist.id) return;
       if (items.length > 0) setCache(`tracks_${playlist.id}`, { items, total });
       const artistIds = [
         ...new Set(items.map((item) => item.item?.artists?.[0]?.id).filter(Boolean)),
       ];
       const genres = await fetchArtists(artistIds);
+      if (activePlaylistId.current !== playlist.id) return;
       if (Object.keys(genres).length > 0) setCache(`genres_${playlist.id}`, genres);
       setGenreMap(genres);
     } catch {
       // network error — tracks already shown if partial load succeeded
     } finally {
-      setLoadingTracks(false);
+      if (activePlaylistId.current === playlist.id) setLoadingTracks(false);
     }
   }
 
