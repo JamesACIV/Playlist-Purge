@@ -294,6 +294,14 @@ export async function addTracksToPlaylist(playlistId, uris) {
   }
 }
 
+// Spotify uses .item on the playlist endpoint but .track on the tracks pagination endpoint.
+// Normalize everything to .item so downstream code is consistent.
+function normalizeItem(raw) {
+  if (raw?.item) return raw;
+  if (raw?.track) return { ...raw, item: raw.track };
+  return raw;
+}
+
 export async function fetchTracks(playlistId, onPage, shallow = false) {
   if (getRateLimit()) return { items: [], total: 0, next: null };
   const token = await getValidToken();
@@ -317,7 +325,7 @@ export async function fetchTracks(playlistId, onPage, shallow = false) {
   const total = page?.total ?? firstItems.length;
   let next = Array.isArray(page) ? null : (page?.next ?? null);
 
-  allItems.push(...firstItems);
+  allItems.push(...firstItems.map(normalizeItem));
   if (onPage) onPage([...allItems], total);
 
   if (shallow) return { items: allItems, total, next };
@@ -336,7 +344,7 @@ export async function fetchTracks(playlistId, onPage, shallow = false) {
       if (!nextRes.ok) break;
       const nextData = await nextRes.json();
       if (nextData.error) break;
-      allItems.push(...(nextData.items ?? []));
+      allItems.push(...(nextData.items ?? []).map(normalizeItem));
       next = nextData.next ?? null;
       if (onPage) onPage([...allItems], total);
     } catch {
